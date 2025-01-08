@@ -1,0 +1,403 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>By-election News Search</title>
+  <link rel="stylesheet" href="style.css">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.css">
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.js"></script>
+</head>
+
+<body>
+  <div class="container">
+    <h1>By-election News Search</h1>
+
+    <div class="search-controls mb-3">
+      <div class="api-key-section">
+        <a href="https://newsdata.io/search-news" target="_blank" class="btn btn-primary mb-2">Get Free API Key</a>
+        <input type="password" 
+               id="apiKey" 
+               class="form-control mb-2" 
+               placeholder="Enter your NewsData.io API key - it should start with pub_"
+               aria-label="API Key">
+      </div>
+      
+      <input type="text" 
+             id="keywordList" 
+             class="form-control" 
+             placeholder="Enter keywords (comma separated)"
+             aria-label="Search keywords">
+    </div>
+
+    <div class="two-column-layout">
+      <div class="table-column">
+        <div id="loadingData" style="display: none;">Loading by-election data...</div>
+
+        <div class="table-container card">
+          <table id="electionsTable">
+            <thead>
+              <tr>
+                <th>Date</th>
+                <th>Council</th>
+                <th>Ward</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+            </tbody>
+          </table>
+        </div>
+
+        <div id="lastUpdated" class="text-center mt-4"></div>
+        <div id="source" class="text-center mt-4"></div>
+      </div>
+
+      <div class="map-column">
+        <div class="card h-100">
+          <div class="map-container">
+            <div id="map"></div>
+            <div id="map-legend" class="map-legend">
+              <h4>By-Election Timeline</h4>
+              <div><span class="legend-marker within-week"></span> Within 1 week</div>
+              <div><span class="legend-marker within-two-weeks"></span> Within 2 weeks</div>
+              <div><span class="legend-marker within-three-weeks"></span> Within 3 weeks</div>
+              <div><span class="legend-marker beyond-three-weeks"></span> 4+ weeks away</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script type="module">
+
+    // Load the locations data
+    const locationsResponse = await fetch('locations.json');
+    const LOCATIONS = await locationsResponse.json();
+
+    const tableBody = document.querySelector('tbody');
+    const apiKeyInput = document.getElementById('apiKey');
+    const keywordListInput = document.getElementById('keywordList');
+    const loadingDataEl = document.getElementById('loadingData');
+    const electionsTable = document.getElementById('electionsTable');
+    const lastUpdatedEl = document.getElementById('lastUpdated');
+    const sourceEl = document.getElementById('source');
+
+    let elections = [];
+    let map;
+    let markers = [];
+
+    // Define marker colors based on date ranges
+    const MARKER_COLORS = {
+      withinWeek: '#FF3B30',
+      withinTwoWeeks: '#FF9500',
+      withinThreeWeeks: '#FFCC00',
+      beyondThreeWeeks: '#007AFF'
+    };
+
+    function initMap() {
+
+
+      map = L.map('map', {
+        minZoom: 5,
+        maxZoom: 18
+      });
+
+      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        attribution: '© OpenStreetMap contributors'
+      }).addTo(map);
+    }
+
+    function getMarkerColor(dateStr) {
+      const electionDate = new Date(dateStr);
+      const today = new Date();
+      const diffDays = Math.ceil((electionDate - today) / (1000 * 60 * 60 * 24));
+
+      if (diffDays <= 7) {
+        return MARKER_COLORS.withinWeek;
+      } else if (diffDays <= 14) {
+        return MARKER_COLORS.withinTwoWeeks;
+      } else if (diffDays <= 21) {
+        return MARKER_COLORS.withinThreeWeeks;
+      } else {
+        return MARKER_COLORS.beyondThreeWeeks;
+      }
+    }
+
+    function createColoredMarker(color) {
+      const markerHtmlStyles = `
+        background-color: ${color};
+        width: 1.5rem;
+        height: 1.5rem;
+        display: block;
+        border-radius: 50%;
+        border: 2px solid white;
+        box-shadow: 0 0 4px rgba(0,0,0,0.5);
+      `;
+
+      return L.divIcon({
+        html: `<span style="${markerHtmlStyles}"></span>`,
+        className: 'colored-marker',
+        iconSize: [18, 18],
+        iconAnchor: [9, 9]
+      });
+    }
+
+    function addMarkersToMap() {
+      // Clear existing markers
+      markers.forEach(marker => marker.remove());
+      markers = [];
+
+      for (const election of elections) {
+        const location = getLocationFromJson(election.council);
+        if (location) {
+          const markerColor = getMarkerColor(election.date);
+          const marker = L.marker([location.lat, location.lng], {
+            icon: createColoredMarker(markerColor)
+          }).bindPopup(`
+            <div class="map-popup-title">${election.ward}</div>
+            <div>${election.council}</div>
+            <div class="map-popup-date">${election.date}</div>
+          `);
+
+          marker.addTo(map);
+          markers.push(marker);
+        }
+      }
+
+      // If we have markers, fit the map to show all of them while respecting UK bounds
+      if (markers.length > 0) {
+        const group = L.featureGroup(markers);
+        const bounds = group.getBounds();
+        map.fitBounds(bounds.pad(0.1));
+      }
+    }
+
+    function getLocationFromJson(council) {
+      // Try exact match first
+      if (LOCATIONS[council]) {
+        return LOCATIONS[council];
+      }
+
+      // Try to find closest match if no exact match
+      const councilLower = council.toLowerCase();
+      const matchingKey = Object.keys(LOCATIONS).find(key =>
+        key.toLowerCase().includes(councilLower) ||
+        councilLower.includes(key.toLowerCase())
+      );
+
+      return matchingKey ? LOCATIONS[matchingKey] : null;
+    }
+
+    function getControlClass(party) {
+      if (!party) return '';
+      const mainParty = party.split('/')[0].trim().toUpperCase();
+      switch (mainParty) {
+        case 'CON': return 'control-CON';
+        case 'LAB': return 'control-LAB';
+        case 'LD': return 'control-LD';
+        case 'GRN': return 'control-GRN';
+        case 'SNP': return 'control-SNP';
+        case 'IND': return 'control-IND';
+        default: return '';
+      }
+    }
+
+    async function fetchByElectionData() {
+      try {
+        loadingDataEl.style.display = 'block';
+        electionsTable.style.display = 'none';
+
+        const targetUrl = 'https://opencouncildata.co.uk/byelections.php?comp=yes';
+        const proxyUrl = `https://corsproxy.io/?${encodeURIComponent(targetUrl)}`;
+        const response = await fetch(proxyUrl);
+        const html = await response.text();
+
+        const parser = new DOMParser();
+        const doc = parser.parseFromString(html, 'text/html');
+        const table = doc.querySelector('table');
+        const rows = Array.from(table.querySelectorAll('tbody tr'));
+
+        elections = rows.map(row => {
+          const cells = Array.from(row.querySelectorAll('td'));
+          return {
+            date: cells[0]?.textContent?.trim() || '',
+            council: cells[1]?.querySelector('a')?.textContent?.trim() || cells[1]?.textContent?.trim() || '',
+            ward: cells[2]?.textContent?.trim() || '',
+            control: cells[3]?.textContent?.trim() || '',
+            defending: cells[4]?.getAttribute('title')?.split('(')[0]?.trim() || cells[4]?.textContent?.trim() || ''
+          };
+        }).filter(election => election.date && election.council);
+
+        populateTable();
+        addMarkersToMap();
+
+        loadingDataEl.style.display = 'none';
+        electionsTable.style.display = 'table';
+
+        const now = new Date();
+        lastUpdatedEl.textContent = `Last updated: ${now.toLocaleDateString()} ${now.toLocaleTimeString()}`;
+        sourceEl.textContent = `Data pulled from https://opencouncildata.co.uk/byelections.php`;
+
+      } catch (error) {
+        loadingDataEl.innerHTML = `
+          <div class="error">
+            Error loading by-election data: ${error.message}
+          </div>
+        `;
+      }
+    }
+
+    function populateTable() {
+      tableBody.innerHTML = '';
+
+      elections.forEach((election, index) => {
+        // Create two rows for each election
+        const mainRow = document.createElement('tr');
+        const subRow = document.createElement('tr');
+
+        // Add classes for styling
+        mainRow.classList.add('election-main-row');
+        subRow.classList.add('election-sub-row');
+
+        // Main row content
+        mainRow.innerHTML = `
+      <td rowspan="2" class="date-cell">
+        <div class="cell-content">
+          <div>${election.date}</div>
+        </div>
+      </td>
+      <td>${election.council}</td>
+      <td>${election.ward}</td>
+      <td rowspan="2">
+        <button class="btn btn-primary search-news" data-index="${index}">
+          Search News
+        </button>
+        <div class="loading-spinner" id="spinner-${index}">
+          Searching...
+        </div>
+        <div class="news-results" id="results-${index}"></div>
+      </td>
+    `;
+
+        // Sub row content for control and defending
+        subRow.innerHTML = `
+      <td>
+        <div class="cell-content">
+          <div class="label-text">Control:</div>
+          <span class="${getControlClass(election.control)}">${election.control || ''}</span>
+        </div>
+      </td>
+      <td>
+        <div class="cell-content">
+          <div class="label-text">Defending:</div>
+          <span class="${getControlClass(election.defending)}">${election.defending || ''}</span>
+        </div>
+      </td>
+    `;
+
+        tableBody.appendChild(mainRow);
+        tableBody.appendChild(subRow);
+      });
+
+
+      // Add click handlers for search buttons
+      document.querySelectorAll('.search-news').forEach(button => {
+        button.addEventListener('click', async () => {
+          const index = button.dataset.index;
+          const election = elections[index];
+          const apiKey = apiKeyInput.value.trim();
+          const keywords = keywordListInput.value.trim();
+
+          if (!apiKey) {
+            alert('Please enter your NewsData.io API key');
+            return;
+          }
+
+          if (!keywords) {
+            alert('Please enter some search keywords');
+            return;
+          }
+
+          const spinner = document.getElementById(`spinner-${index}`);
+          const resultsEl = document.getElementById(`results-${index}`);
+
+          try {
+            spinner.classList.add('active');
+            resultsEl.classList.remove('active');
+
+            const articles = await searchNews(election, apiKey, keywords);
+
+            resultsEl.classList.add('active');
+            displayResults(articles, resultsEl);
+
+          } catch (error) {
+            resultsEl.classList.add('active');
+            resultsEl.innerHTML = `
+          <div class="error">
+            Error fetching news: ${error.message}
+          </div>
+        `;
+
+          } finally {
+            spinner.classList.remove('active');
+          }
+        });
+      });
+    }
+
+    async function searchNews(election, apiKey, keywords) {
+      const { council, ward } = election;
+      const searchTerms = keywords.split(',').map(term => term.trim());
+
+      const query = `("${council}" OR "${ward}") AND (${searchTerms.join(' OR ')})`;
+
+      const response = await fetch(
+        `https://newsdata.io/api/1/news?apikey=${apiKey}&q=${encodeURIComponent(query)}&language=en`
+      );
+
+      if (!response.ok) {
+        throw new Error(`API request failed: ${response.statusText}`);
+      }
+
+      const data = await response.json();
+
+      if (data.status === 'error') {
+        throw new Error(data.message || 'API returned an error');
+      }
+
+      return data.results || [];
+    }
+
+    function displayResults(articles, resultsElement) {
+      if (!articles.length) {
+        resultsElement.innerHTML = '<p>No news found for this area.</p>';
+        return;
+      }
+
+      const html = articles.map(article => `
+        <div class="article-preview">
+          <h3>${article.title}</h3>
+          <div class="article-meta">
+            ${article.source_id} • ${new Date(article.pubDate).toLocaleDateString()}
+          </div>
+          <p>${article.description || 'No description available'}</p>
+          <a href="${article.link}" target="_blank" rel="noopener noreferrer" 
+             class="btn btn-secondary btn-sm">
+            Read More
+          </a>
+        </div>
+      `).join('');
+
+      resultsElement.innerHTML = html;
+    }
+
+    // Initialize
+    initMap();
+    fetchByElectionData();
+  </script>
+</body>
+
+</html>
