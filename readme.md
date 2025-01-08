@@ -1,12 +1,19 @@
 # ⭐ By-Election Early Warning System
 
+View the dashboard here: https://campaignlab.github.io/By-Election-Early-Warning-System/
+
 ## Project Status Update
 We have made some progress on the initial implementation. So far, we have:
 - Created a web interface that pulls data from opencouncildata.co.uk/byelections.php
 - Implemented an interactive map showing all upcoming by-elections with color-coding based on timeline
 - Added integration with NewsData.io API for local news searching
 
-The current implementation can be found in the `index.html` file which includes both the interface and the core functionality.
+The current implementation can be found in the `index.html` file which includes both the interface and the core functionality. 
+
+### Next steps:
+- Integrate a better news API (something with better local news coverage)
+- Add councillor monitoring (attendance, personal websites, social media) to view per by-election
+- Add a historical trend of council seats
 
 ## Original Project Plan
 
